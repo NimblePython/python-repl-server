@@ -8,6 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(nlohmann_json REQUIRED)
 
+# Add GraphQL parser library
+add_subdirectory(third_party/libgraphqlparser)
+
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
@@ -33,6 +36,7 @@ add_executable(python_repl_server ${SOURCES} ${HEADERS})
 target_link_libraries(python_repl_server
     Boost::system
     nlohmann_json::nlohmann_json
+    graphqlparser
     pthread
 )
 

@@ -13,6 +13,8 @@ add_subdirectory(third_party/libgraphqlparser)
 
 # Include directories
 include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/libgraphqlparser)
+include_directories(${CMAKE_SOURCE_DIR}/third_party/libgraphqlparser/c)
 
 # Source files
 set(SOURCES

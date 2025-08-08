@@ -91,8 +91,12 @@ void HttpServer::do_accept() {
 
 void HttpServer::handle_http_session(tcp::socket socket, std::shared_ptr<http::request_parser<http::string_body>> parser, std::shared_ptr<beast::flat_buffer> buffer) {
     std::cout << "[DEBUG] handle_http_session: Starting to read full request..." << std::endl;
-    http::async_read(socket, *buffer, *parser,
-        [this, socket = std::move(socket), parser, buffer]
+    
+    // Create a shared_ptr to keep the socket alive
+    auto sp_socket = std::make_shared<tcp::socket>(std::move(socket));
+    
+    http::async_read(*sp_socket, *buffer, *parser,
+        [this, sp_socket, parser, buffer]
         (beast::error_code ec, std::size_t bytes_transferred) mutable {
             if (!ec) {
                 std::cout << "[DEBUG] handle_http_session: Full request read successfully, bytes: " << bytes_transferred << std::endl;
@@ -100,9 +104,12 @@ void HttpServer::handle_http_session(tcp::socket socket, std::shared_ptr<http::r
                 std::cout << "[DEBUG] handle_http_session: Processing request..." << std::endl;
                 auto response = process_request(req);
                 std::cout << "[DEBUG] handle_http_session: Request processed, sending response..." << std::endl;
-                                            send_response(std::move(socket), response);
+                send_response(std::move(*sp_socket), response);
             } else {
                 std::cerr << "[ERROR] handle_http_session: Failed to read full request: " << ec.message() << std::endl;
+                // Try to close the socket gracefully
+                beast::error_code close_ec;
+                sp_socket->close(close_ec);
             }
         });
 }
@@ -171,6 +178,7 @@ http::response<http::string_body> HttpServer::process_request(const http::reques
     if (req.method() == http::verb::post && req.target() == "/graphql") {
         std::cout << "[DEBUG] process_request: Handling GraphQL POST request" << std::endl;
         std::string body = req.body();
+        std::cout << "[DEBUG] process_request: Raw request body: '" << body << "'" << std::endl;
         std::string response = handle_graphql_request(body);
         res.body() = response;
         res.result(http::status::ok);
@@ -215,31 +223,22 @@ http::response<http::string_body> HttpServer::process_request(const http::reques
 }
 
 std::string HttpServer::handle_graphql_request(const std::string& body) {
-    std::cout << "[DEBUG] handle_graphql_request: Starting with body size: " << body.size() << std::endl;
-    
-    if (!python_executor_) {
-        std::cout << "[DEBUG] handle_graphql_request: python_executor_ is null" << std::endl;
-        json error = {
-            {"errors", {
-                {
-                    {"message", "Python executor not available"},
-                    {"extensions", {{"code", "INTERNAL_ERROR"}}}
-                }
-            }}
-        };
-        return error.dump(2);
-    }
-    
-    std::cout << "[DEBUG] handle_graphql_request: python_executor_ is not null" << std::endl;
-    
-    try {
-        std::cout << "[DEBUG] handle_graphql_request: Creating GraphQLHandler..." << std::endl;
-        GraphQLHandler handler(python_executor_);
-        std::cout << "[DEBUG] handle_graphql_request: Parsing request..." << std::endl;
-        GraphQLRequest request = handler.parseRequest(body);
-        std::cout << "[DEBUG] handle_graphql_request: Executing query..." << std::endl;
-        GraphQLResponse response = handler.executeQuery(request);
-        std::cout << "[DEBUG] handle_graphql_request: Query executed, success: " << response.success << std::endl;
+            if (!python_executor_) {
+            json error = {
+                {"errors", {
+                    {
+                        {"message", "Python executor not available"},
+                        {"extensions", {{"code", "INTERNAL_ERROR"}}}
+                    }
+                }}
+            };
+            return error.dump(2);
+        }
+        
+        try {
+            GraphQLHandler handler(python_executor_);
+            GraphQLRequest request = handler.parseRequest(body);
+            GraphQLResponse response = handler.executeQuery(request);
     
         if (response.success) {
             return response.data;
@@ -273,10 +272,20 @@ void HttpServer::send_response(tcp::socket socket, const http::response<http::st
     auto sp_socket = std::make_shared<tcp::socket>(std::move(socket));
     // Create a copy of response to keep it alive in the lambda
     auto response_copy = std::make_shared<http::response<http::string_body>>(response);
+    
     http::async_write(*sp_socket, *response_copy,
         [sp_socket, response_copy](beast::error_code ec, std::size_t bytes_transferred) {
             if (ec) {
-                std::cerr << "Error sending response: " << ec.message() << std::endl;
+                std::cerr << "[ERROR] send_response: Error sending response: " << ec.message() << std::endl;
+            } else {
+                std::cout << "[DEBUG] send_response: Response sent successfully, bytes: " << bytes_transferred << std::endl;
+            }
+            
+            // Close the socket after sending the response
+            beast::error_code close_ec;
+            sp_socket->shutdown(tcp::socket::shutdown_both, close_ec);
+            if (close_ec) {
+                std::cerr << "[ERROR] send_response: Error closing socket: " << close_ec.message() << std::endl;
             }
         });
 }

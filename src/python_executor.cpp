@@ -8,6 +8,7 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <sys/wait.h>
 
 namespace fs = std::filesystem;
 
@@ -116,6 +117,7 @@ PythonResult PythonExecutor::executeFile(const std::string& file_path) {
     std::string output, error;
 
     std::string cmd = python_path_ + " " + file_path + " 2>&1";
+    std::cout << "[DEBUG] executeFile: Executing command: " << cmd << std::endl;
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
 
     if (!pipe) {
@@ -132,7 +134,9 @@ PythonResult PythonExecutor::executeFile(const std::string& file_path) {
         output += buffer.data();
     }
 
-    int exit_code = pclose(pipe.release());
+    int status = pclose(pipe.release());
+    int exit_code = WEXITSTATUS(status);
+    std::cout << "[DEBUG] executeFile: Exit code: " << exit_code << ", Output: '" << output << "'" << std::endl;
     
     return {
         output,
@@ -140,7 +144,7 @@ PythonResult PythonExecutor::executeFile(const std::string& file_path) {
         exit_code,
         std::chrono::milliseconds(0),
         exit_code == 0
-    };    
+    };
 }
 
 void PythonExecutor::cleanupTempFile(const std::string& file_path) {

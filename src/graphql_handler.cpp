@@ -1,344 +1,283 @@
- #include "graphql_handler.h"
- #include <iostream>
- #include <regex>
- #include <nlohmann/json.hpp>
+#include "graphql_handler.h"
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <memory>
+#include <regex>
 
- using json = nlohmann::json;
+using json = nlohmann::json;
 
- GraphQLHandler::GraphQLHandler(std::shared_ptr<PythonExecutor> executor)
+GraphQLHandler::GraphQLHandler(std::shared_ptr<PythonExecutor> executor)
     : python_executor_(executor) {}
 
- GraphQLRequest GraphQLHandler::parseRequest(const std::string& body) {
+GraphQLRequest GraphQLHandler::parseRequest(const std::string& body) {
     GraphQLRequest request;
+
     try {
-        json j = json::parse(body);
+        std::cout << "[DEBUG] parseRequest: Starting to parse body: '" << body << "'" << std::endl;
+        json req_json = json::parse(body);
+        std::cout << "[DEBUG] parseRequest: JSON parsed successfully" << std::endl;
 
-        if (j.contains("query")) {
-            request.query = j["query"];
+        if (req_json.contains("query") && req_json["query"].is_string()) {
+            request.query = req_json["query"].get<std::string>();
+            std::cout << "[DEBUG] parseRequest: Query extracted from JSON: '" << request.query << "'" << std::endl;
+        } else {
+            request.errors = "Invalid GraphQL request: 'query' field missing or not a string.";
+            return request;
         }
 
-        if (j.contains("variables")) {
-            request.variables = j["variables"].dump();
+        // Parse GraphQL query using libgraphqlparser
+        const char* error = nullptr;
+        std::cout << "[DEBUG] parseRequest: About to parse GraphQL query: '" << request.query << "'" << std::endl;
+        GraphQLAstNode* ast = graphql_parse_string(request.query.c_str(), &error);
+
+        if (error) {
+            std::cout << "[DEBUG] parseRequest: GraphQL parsing error: " << error << std::endl;
+            request.errors = std::string("GraphQL parsing error: ") + error;
+            graphql_error_free(const_cast<char*>(error));
+            return request;
+        }
+        if (!ast) {
+            std::cout << "[DEBUG] parseRequest: GraphQL AST is null" << std::endl;
+            request.errors = "Failed to parse GraphQL query.";
+            return request;
+        }
+        
+        std::cout << "[DEBUG] parseRequest: GraphQL parsing successful, extracting code..." << std::endl;
+        // Extract code from AST
+        request.code = extractCodeFromQuery(request.query);
+
+        if (request.code.empty()) {
+            std::cout << "[DEBUG] parseRequest: No code extracted from query" << std::endl;
+            request.errors = "GraphQL query must contain 'executePython(code: \"...\")'.";
+        } else {
+            std::cout << "[DEBUG] parseRequest: Code extracted successfully: '" << request.code << "'" << std::endl;
         }
 
-        if (j.contains("operationName")) {
-            request.operation_name = j["operationName"];
-        }
-    } catch (const json::exception& e) {
-        std::cerr << "Error parsing GraphQL request: " << e.what() << std::endl;
+        // Cleanup AST
+        graphql_node_free(ast);
+    } catch(const json::exception& e) {
+        request.errors = "Invalid JSON in GraphQL request: " + std::string(e.what());
+    } catch(const std::exception& e) {
+        request.errors = "Error parsing GraphQL request: " + std::string(e.what());
     }
 
     return request;
 }
+std::string GraphQLHandler::extractCodeFromQuery(const std::string& query) {
+    std::cout << "[DEBUG] extractCodeFromQuery: Starting with query: '" << query << "'" << std::endl;
+    
+    // Parse the query to get AST
+    const char* error = nullptr;
+    GraphQLAstNode* ast = graphql_parse_string(query.c_str(), &error);
+    
+    if (error || !ast) {
+        if (error) {
+            std::cout << "[DEBUG] extractCodeFromQuery: GraphQL parsing error: " << error << std::endl;
+            graphql_error_free(const_cast<char*>(error));
+        } else {
+            std::cout << "[DEBUG] extractCodeFromQuery: GraphQL AST is null" << std::endl;
+        }
+        return "";
+    }
+
+    // Traverse AST to find executePython field and its code argument
+    // This is a simplified version - you'll need to implement proper AST traversal
+    std::string code;
+    
+    // For now, fallback to regex for code extraction
+    // TODO: Implement proper AST traversal
+    std::cout << "[DEBUG] extractCodeFromQuery: Using regex to extract code" << std::endl;
+    std::regex code_regex("executePython\\(code:\\s*\"((?:\\\\\"|[^\"])*)\"\\)");
+    std::smatch matches;
+    
+    std::cout << "[DEBUG] extractCodeFromQuery: Running regex search..." << std::endl;
+    if (std::regex_search(query, matches, code_regex) && matches.size() > 1) {
+        code = matches[1].str();
+        std::cout << "[DEBUG] extractCodeFromQuery: Raw extracted code: '" << code << "'" << std::endl;
+        
+        // Unescape all escaped characters
+        std::cout << "[DEBUG] extractCodeFromQuery: Starting unescaping..." << std::endl;
+        std::string unescaped_code;
+        for (size_t i = 0; i < code.length(); ++i) {
+            if (code[i] == '\\' && i + 1 < code.length()) {
+                std::cout << "[DEBUG] extractCodeFromQuery: Found escape sequence at position " << i << ": \\" << code[i + 1] << std::endl;
+                switch (code[i + 1]) {
+                    case '"':
+                        unescaped_code += '"';
+                        ++i; // Skip the next character
+                        break;
+                    case 'n':
+                        unescaped_code += '\n';
+                        ++i; // Skip the next character
+                        break;
+                    case 't':
+                        unescaped_code += '\t';
+                        ++i; // Skip the next character
+                        break;
+                    case 'r':
+                        unescaped_code += '\r';
+                        ++i; // Skip the next character
+                        break;
+                    case '\\':
+                        unescaped_code += '\\';
+                        ++i; // Skip the next character
+                        break;
+                    default:
+                        unescaped_code += code[i]; // Keep the backslash
+                        break;
+                }
+            } else {
+                unescaped_code += code[i];
+            }
+        }
+        code = unescaped_code;
+        std::cout << "[DEBUG] extractCodeFromQuery: Final unescaped code: '" << code << "'" << std::endl;
+    } else {
+        std::cout << "[DEBUG] extractCodeFromQuery: Regex search failed - no matches found" << std::endl;
+        std::cout << "[DEBUG] extractCodeFromQuery: Query length: " << query.length() << std::endl;
+        std::cout << "[DEBUG] extractCodeFromQuery: Looking for pattern: executePython(code: \"...\")" << std::endl;
+    }
+
+    graphql_node_free(ast);
+    return code;
+}
 
 GraphQLResponse GraphQLHandler::executeQuery(const GraphQLRequest& request) {
-    std::cout << "[DEBUG] executeQuery: Starting..." << std::endl;
     GraphQLResponse response;
-
+    
     try {
-        // Check for introspection query        
+        // Handle introspection queries
         if (request.query.find("__schema") != std::string::npos ||
             request.query.find("__type") != std::string::npos) {
-            std::cout << "[DEBUG] executeQuery: Handling introspection query" << std::endl;
             response.data = handleIntrospection(request.query);
             response.success = true;
             return response;
         }
 
-        // Extract code from query
-        std::cout << "[DEBUG] executeQuery: Extracting code from query..." << std::endl;
-        std::string code = extractCodeFromQuery(request.query);
-
-        if (code.empty()) {
-            std::cout << "[DEBUG] executeQuery: No code found in query" << std::endl;
-            response.errors = "No Python code found in query. Expected: executePython(code: \"...\")";
+        // Execute Python code
+        if (!python_executor_) {
+            response.errors = "Python executor not available";
             response.success = false;
             return response;
         }
 
-        std::cout << "[DEBUG] executeQuery: Code extracted: " << code << std::endl;
-
-        // Execute Python code
-        if (!python_executor_) {
-            std::cout << "[DEBUG] executeQuery: Python executor is null" << std::endl;
-            response.errors = "Python executor not available";
+        if (request.code.empty()) {
+            response.errors = "No Python code found in query.";
             response.success = false;
-        } else {
-            try {
-                std::cout << "[DEBUG] executeQuery: About to execute Python code..." << std::endl;
-                PythonResult py_result = python_executor_->execute(code);
-                std::cout << "[DEBUG] executeQuery: Python execution completed, success: " << py_result.success << std::endl;
-                std::cout << "[DEBUG] executeQuery: Output: " << py_result.output << std::endl;
-                std::cout << "[DEBUG] executeQuery: Error: " << py_result.error << std::endl;
-                std::cout << "[DEBUG] executeQuery: Exit code: " << py_result.exit_code << std::endl;
-                
-                std::cout << "[DEBUG] executeQuery: Creating JSON objects..." << std::endl;
-                json data_json;
-                json execute_python_json;
-                
-                try {
-                    execute_python_json["output"] = py_result.output;
-                    std::cout << "[DEBUG] executeQuery: output added to JSON" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "[ERROR] executeQuery: Exception adding output: " << e.what() << std::endl;
-                }
-                
-                try {
-                    std::cout << "[DEBUG] executeQuery: About to add error field, error.empty(): " << py_result.error.empty() << std::endl;
-                    if (py_result.error.empty()) {
-                        execute_python_json["error"] = nullptr;
-                    } else {
-                        execute_python_json["error"] = py_result.error;
-                    }
-                    std::cout << "[DEBUG] executeQuery: error added to JSON" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "[ERROR] executeQuery: Exception adding error: " << e.what() << std::endl;
-                }
-                
-                // Safe conversion of execution time
-                double execution_time_seconds = 0.0;
-                try {
-                    execution_time_seconds = py_result.execution_time.count() / 1000.0;
-                } catch (const std::exception& e) {
-                    std::cerr << "[ERROR] executeQuery: Exception in execution time conversion: " << e.what() << std::endl;
-                    execution_time_seconds = 0.0;
-                }
-                std::cout << "[DEBUG] executeQuery: Execution time: " << execution_time_seconds << std::endl;
-                
-                try {
-                    execute_python_json["executionTime"] = execution_time_seconds;
-                    std::cout << "[DEBUG] executeQuery: executionTime added to JSON" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "[ERROR] executeQuery: Exception adding executionTime: " << e.what() << std::endl;
-                }
-                
-                try {
-                    data_json["executePython"] = execute_python_json;
-                    std::cout << "[DEBUG] executeQuery: executePython added to data_json" << std::endl;
-                } catch (const std::exception& e) {
-                    std::cerr << "[ERROR] executeQuery: Exception adding executePython: " << e.what() << std::endl;
-                }
-                
-                if (!py_result.success) {
-                    json error_entry = {
-                        {"message", py_result.error.empty() ? "Python execution failed" : py_result.error},
-                        {"extensions", {{"code", "PYTHON_EXECUTION_ERROR"}, {"exitCode", py_result.exit_code}}}
-                    };
-                    data_json["errors"] = {error_entry};
-                    response.success = false;
-                    response.errors = py_result.error.empty() ? "Python execution failed" : py_result.error;
-                } else {
-                    response.success = true;
-                }
-                response.data = data_json.dump(2);
-                std::cout << "[DEBUG] executeQuery: Response prepared successfully" << std::endl;
-            } catch (const std::exception& e) {
-                std::cerr << "[ERROR] executeQuery: Python execution exception: " << e.what() << std::endl;
-                response.errors = std::string("Python execution error: ") + e.what();
-                response.success = false;
-            }
+            return response;
         }
-            
+
+        PythonResult py_result = python_executor_->execute(request.code);
+        
+        // Create GraphQL response
+        json data_json;
+        json execute_python_json;
+        
+        execute_python_json["output"] = py_result.output;
+        if (py_result.error.empty()) {
+            execute_python_json["error"] = "";
+        } else {
+            execute_python_json["error"] = py_result.error;
+        }
+        execute_python_json["executionTime"] = py_result.execution_time.count() / 1000.0;
+        
+        data_json["executePython"] = execute_python_json;
+        
+        if (!py_result.success) {
+            json error_entry = {
+                {"message", py_result.error.empty() ? "Python execution failed" : py_result.error},
+                {"extensions", {{"code", "PYTHON_EXECUTION_ERROR"}, {"exitCode", py_result.exit_code}}}
+            };
+            data_json["errors"] = {error_entry};
+            response.success = false;
+            response.errors = py_result.error.empty() ? "Python execution failed" : py_result.error;
+        } else {
+            response.success = true;
+        }
+        
+        response.data = data_json.dump(2);
+        
     } catch (const std::exception& e) {
-        std::cerr << "[ERROR] executeQuery: General exception: " << e.what() << std::endl;
         response.errors = std::string("Error executing query: ") + e.what();
         response.success = false;
     }
-
+    
     return response;
 }
 
 std::string GraphQLHandler::handleExecutePython(const std::string& code) {
     if (!python_executor_) {
-        return createResponse({
-            "",
-            "Python executor not initialized",
-            -1,
-            std::chrono::milliseconds(0),
-            false
-        });
+        return "{\"error\": \"Python executor not available\"}";
     }
-
+    
     PythonResult result = python_executor_->execute(code);
     return createResponse(result);
+}
+
+std::string GraphQLHandler::createResponse(const PythonResult& result) {
+    json response;
+    response["output"] = result.output;
+    response["error"] = result.error.empty() ? nullptr : result.error;
+    response["executionTime"] = result.execution_time.count() / 1000.0;
+    response["success"] = result.success;
+    
+    return response.dump(2);
 }
 
 std::string GraphQLHandler::getSchema() {
     json schema = {
         {"__schema", {
-            {"queryType", {
-                {"name", "Query"}
-            }},
-            {"mutationType", nullptr},
-            {"subscriptionType", nullptr},
+            {"queryType", {{"name", "Query"}}},
             {"types", {
                 {
-                    {"name", "Query"},
                     {"kind", "OBJECT"},
+                    {"name", "Query"},
                     {"fields", {
                         {
                             {"name", "executePython"},
-                            {"type", {
-                                {"name", "PythonResult"},
-                                {"kind", "OBJECT"}
-                            }},
+                            {"type", {{"name", "PythonExecutionResult"}}},
                             {"args", {
-                                {
-                                    {"name", "code"},
-                                    {"type", {
-                                        {"name", "String"},
-                                        {"kind", "SCALAR"}
-                                    }},
-                                    {"defaultValue", nullptr}
-                                }
+                                {{"name", "code"}, {"type", {{"name", "String"}}}}
                             }}
                         }
                     }}
                 },
                 {
-                    {"name", "PythonResult"},
                     {"kind", "OBJECT"},
+                    {"name", "PythonExecutionResult"},
                     {"fields", {
-                        {
-                            {"name", "output"},
-                            {"type", {
-                                {"name", "String"},
-                                {"kind", "SCALAR"}
-                            }}
-                        },
-                        {
-                            {"name", "error"},
-                            {"type", {
-                                {"name", "String"},
-                                {"kind", "SCALAR"}
-                            }}
-                        },
-                        {
-                            {"name", "executionTime"},
-                            {"type", {
-                                {"name", "Float"},
-                                {"kind", "SCALAR"}
-                            }}
-                        }
+                        {{"name", "output"}, {"type", {{"name", "String"}}}},
+                        {{"name", "error"}, {"type", {{"name", "String"}}}},
+                        {{"name", "executionTime"}, {"type", {{"name", "Float"}}}}
                     }}
                 },
-                {
-                    {"name", "String"},
-                    {"kind", "SCALAR"}
-                },
-                {
-                    {"name", "Float"},
-                    {"kind", "SCALAR"}
-                }
+                {{"kind", "SCALAR"}, {"name", "String"}},
+                {{"kind", "SCALAR"}, {"name", "Float"}}
             }}
         }}
     };
-    
     return json{{"data", schema}}.dump(2);
 }
 
 bool GraphQLHandler::validateQuery(const std::string& query) {
-    // Check for basic required structure
-    if (query.find("executePython") == std::string::npos) { 
+    const char* error = nullptr;
+    GraphQLAstNode* ast = graphql_parse_string(query.c_str(), &error);
+    
+    if (error) {
+        graphql_error_free(const_cast<char*>(error));
         return false;
     }
-
-    if (query.find("code:") == std::string::npos) {
-        return false;
-    }
-
-    return true;
-}
-
-std::string GraphQLHandler::extractCodeFromQuery(const std::string& query) {
-    // Try multiple patterns for extracting code
     
-    // Pattern 1: executePython(code: "code here")
-    std::regex code_regex1("executePython\\(code:\\s*\"([^\"]*)\"\\)");
-    std::smatch match1;
-    
-    if (std::regex_search(query, match1, code_regex1) && match1.size() > 1) {
-        return unescapeString(match1[1].str());
+    if (ast) {
+        graphql_node_free(ast);
+        return true;
     }
     
-    // Pattern 2: executePython(code: """code here""")
-    std::regex code_regex2("executePython\\(code:\\s*\"\"\"([^\"]*)\"\"\"\\)");
-    std::smatch match2;
-    
-    if (std::regex_search(query, match2, code_regex2) && match2.size() > 1) {
-        return unescapeString(match2[1].str());
-    }
-    
-    // Pattern 3: executePython(code: '''code here''')
-    std::regex code_regex3("executePython\\(code:\\s*'''([^']*)'''\\)");
-    std::smatch match3;
-    
-    if (std::regex_search(query, match3, code_regex3) && match3.size() > 1) {
-        return unescapeString(match3[1].str());
-    }
-    
-    return "";    
-}
-
-std::string GraphQLHandler::unescapeString(const std::string& str) {
-    std::string unescaped;
-    for (size_t i = 0; i < str.length(); ++i) {
-        if (str[i] == '\\' && i + 1 < str.length()) {
-            switch (str[i + 1]) {
-                case 'n': unescaped += '\n'; break;
-                case 't': unescaped += '\t'; break;
-                case 'r': unescaped += '\r'; break;
-                case '"': unescaped += '"'; break;
-                case '\\': unescaped += '\\'; break;
-                default: unescaped += str[i + 1]; break;
-            }
-            ++i;
-        } else {
-            unescaped += str[i];
-        }
-    }
-    return unescaped;
-}
-
-std::string GraphQLHandler::createResponse(const PythonResult& result) {
-    json response;
-    
-    if (result.success) {
-        response["data"] = {
-            {"executePython", {
-                {"output", result.output},
-                {"error", result.error},
-                {"executionTime", result.execution_time.count()}
-            }}
-        };
-    } else {
-        response["errors"] = {
-            {
-                {"message", result.error.empty() ? "Unknown error" : result.error},
-                {"extensions", {
-                    {"code", "PYTHON_EXECUTION_ERROR"},
-                    {"exitCode", result.exit_code}
-                }}
-            }
-        };
-    }
-    
-    return response.dump(2);
+    return false;
 }
 
 std::string GraphQLHandler::handleIntrospection(const std::string& query) {
-    // Return our schema for introspection queries
     return getSchema();
 }
 
-std::string GraphQLHandler::extractArgument(const std::string& query, const std::string& field_name, const std::string& arg_name) {
-    std::string pattern = field_name + "\\([^)]*?" + arg_name + ":\\s*\"([^\"]*)\"[^)]*\\)";
-    std::regex arg_regex(pattern);
-    std::smatch match;
-    
-    if (std::regex_search(query, match, arg_regex) && match.size() > 1) {
-        return unescapeString(match[1].str());
-    }
-    
-    return "";
-}
+// TODO: Implement AST traversal methods when needed

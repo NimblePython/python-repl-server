@@ -1,0 +1,3 @@
+{
+  "query": "query { executePython(code: \"person = {\\\"name\\\": \\\"John\\\", \\\"age\\\": 30, \\\"city\\\": \\\"New York\\\"}\\nprint(f\\\"Person: {person}\\\")\\nprint(f\\\"Name: {person[\\\"name\\\"]}\\\")\\nprint(f\\\"Age: {person[\\\"age\\\"]}\\\")\") { output error executionTime } }"
+} 

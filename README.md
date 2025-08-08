@@ -1,6 +1,6 @@
 # Python REPL Server
 
-C++ HTTP/WebSocket сервер для выполнения Python кода через GraphQL API.
+C++ HTTP/WebSocket сервер для выполнения Python кода через GraphQL-подобный API.
 
 ## ⚠️ Статус проекта
 
@@ -15,10 +15,27 @@ C++ HTTP/WebSocket сервер для выполнения Python кода че
 
 ## Возможности
 
-- **GraphQL API** - выполнение Python кода через GraphQL запросы
+- **GraphQL-подобный API** - выполнение Python кода через JSON запросы в GraphQL формате
 - **HTTP/WebSocket** - поддержка обоих протоколов
 - **Асинхронность** - построен на Boost.Beast и Boost.Asio
 - **Безопасность** - изоляция выполнения Python кода
+
+## ⚠️ Ограничения API
+
+Это **НЕ полноценный GraphQL** сервер. Реализовано:
+- JSON формат запросов
+- Endpoint `/graphql`
+- Операция `executePython(code: String)`
+- Базовая интроспекция (`__schema`, `__type`)
+- Простая валидация запросов
+- GraphQL схема с типами `Query` и `PythonResult`
+
+**НЕ поддерживается:**
+- Полная валидация запросов
+- Переменные и фрагменты
+- Подписки и мутации
+- Директивы
+- Сложные типы данных
 
 ## Быстрый старт
 
@@ -46,7 +63,7 @@ curl -X POST http://localhost:8080/graphql \
 ## API
 
 - `GET /` - проверка состояния сервера
-- `POST /graphql` - GraphQL endpoint
+- `POST /graphql` - GraphQL-подобный endpoint
 - WebSocket - для real-time выполнения
 
 ## Требования

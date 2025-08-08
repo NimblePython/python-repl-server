@@ -1,0 +1,3 @@
+[submodule "thrid_party/libgraphqlparser"]
+	path = thrid_party/libgraphqlparser
+	url = https://github.com/NimblePython/libgraphqlparser.git

@@ -195,7 +195,9 @@ GraphQLResponse GraphQLHandler::executeQuery(const GraphQLRequest& request) {
             response.success = true;
         }
         
-        response.data = data_json.dump(2);
+        json final_response;
+        final_response["data"] = data_json;
+        response.data = final_response.dump(2);
         
     } catch (const std::exception& e) {
         response.errors = std::string("Error executing query: ") + e.what();

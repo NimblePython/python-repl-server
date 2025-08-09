@@ -183,17 +183,9 @@ GraphQLResponse GraphQLHandler::executeQuery(const GraphQLRequest& request) {
         
         data_json["executePython"] = execute_python_json;
         
-        if (!py_result.success) {
-            json error_entry = {
-                {"message", py_result.error.empty() ? "Python execution failed" : py_result.error},
-                {"extensions", {{"code", "PYTHON_EXECUTION_ERROR"}, {"exitCode", py_result.exit_code}}}
-            };
-            data_json["errors"] = {error_entry};
-            response.success = false;
-            response.errors = py_result.error.empty() ? "Python execution failed" : py_result.error;
-        } else {
-            response.success = true;
-        }
+        // Всегда возвращаем успешный GraphQL ответ, даже если Python код содержит ошибки
+        // Ошибки Python будут в поле error внутри executePython
+        response.success = true;
         
         json final_response;
         final_response["data"] = data_json;

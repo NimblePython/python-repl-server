@@ -15,7 +15,7 @@ void signal_handler([[maybe_unused]] int signal) {
 
 int main(int argc, char* argv[]) {
     try {
-        std::string address = "127.0.0.1";
+        std::string address = "0.0.0.0";
         unsigned short port = 8080;
 
         for (int i = 1; i < argc; ++i) {
